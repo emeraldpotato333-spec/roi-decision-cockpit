@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  background: #f4f5f1;
+}
+
+.dark {
+  color-scheme: dark;
+  background: #171615;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid #d7a84f;
+  outline-offset: 3px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  width: 18px;
+  border-radius: 999px;
+  border: 3px solid #f4f5f1;
+  background: #171615;
+  box-shadow: 0 4px 18px rgba(23, 22, 21, 0.28);
+}
+
+.dark input[type="range"]::-webkit-slider-thumb {
+  border-color: #f3eadc;
+  background: #d7a84f;
+}
+
+input[type="range"]::-moz-range-thumb {
+  height: 18px;
+  width: 18px;
+  border-radius: 999px;
+  border: 3px solid #f7f3eb;
+  background: #171615;
+  box-shadow: 0 4px 18px rgba(23, 22, 21, 0.28);
+}
+
+@media print {
+  body {
+    background: white !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-summary {
+    display: block !important;
+    color: #171615 !important;
+  }
+}
