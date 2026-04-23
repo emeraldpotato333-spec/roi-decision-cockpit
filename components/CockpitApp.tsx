@@ -21,12 +21,12 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PHASE_NOTE, STATUS_OPTIONS, STORAGE_KEY, createId, getDefaultItems, laneMeta, starterFor } from "@/lib/defaults";
+import { LEGACY_STORAGE_KEYS, PHASE_NOTE, STATUS_OPTIONS, STORAGE_KEY, createId, getDefaultItems, laneMeta, starterFor } from "@/lib/defaults";
 import { buildDecisionSummary } from "@/lib/summary";
 import { formatScore, rankLanes, scoreLabel } from "@/lib/scoring";
 import type { CockpitState, CompletedLane, DailyBoard, ExecutionBlock, Lane, LaneStatus, RankedLane, ScoreKey } from "@/lib/types";
 
-type SaveState = "loading" | "saved" | "saving";
+type SaveState = "loading" | "saved" | "saving" | "failed";
 type ButtonVariant = "primary" | "quiet" | "danger";
 type DateDirection = -1 | 0 | 1;
 
@@ -64,6 +64,14 @@ function reviewStamp() {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit"
+  }).format(new Date());
+}
+
+function saveStamp() {
+  return new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit"
   }).format(new Date());
 }
 
@@ -135,6 +143,17 @@ function initialState(): CockpitState {
     theme: "light",
     onboardingDismissed: false,
     lastReviewed: board.lastReviewed
+  };
+}
+
+function blankBoard(lastReviewed = reviewStamp()): DailyBoard {
+  return {
+    items: [],
+    completedToday: [],
+    selectedId: "",
+    phaseNote: PHASE_NOTE,
+    executionBlock: starterFor(""),
+    lastReviewed
   };
 }
 
@@ -229,9 +248,11 @@ function sanitizeBoard(value: unknown, fallback: DailyBoard): DailyBoard {
 }
 
 function sanitizeSavedState(saved: Partial<CockpitState> | null): CockpitState | null {
-  if (!saved || !Array.isArray(saved.items)) return null;
+  if (!saved || typeof saved !== "object") return null;
   const fallback = initialState();
-  const items = saved.items
+  const todayKey = dateKey();
+  const rawItems = Array.isArray(saved.items) ? saved.items : [];
+  const items = rawItems
     .map((item, index) => sanitizeLane(item, `saved-lane-${index}`))
     .filter((item): item is Lane => Boolean(item));
   const completedToday = Array.isArray(saved.completedToday)
@@ -243,26 +264,31 @@ function sanitizeSavedState(saved: Partial<CockpitState> | null): CockpitState |
     ? saved.selectedId
     : items[0]?.id || "";
 
-  if (saved.items.length > 0 && items.length === 0) {
+  if (rawItems.length > 0 && items.length === 0) {
     return { ...fallback, completedToday };
   }
 
-  const fallbackBoard = makeBoard({
+  const legacyBoard = makeBoard({
     items,
     completedToday,
     selectedId,
-    phaseNote: saved.phaseNote || PHASE_NOTE,
+    phaseNote: typeof saved.phaseNote === "string" ? saved.phaseNote : PHASE_NOTE,
     executionBlock: saved.executionBlock || fallback.executionBlock,
-    lastReviewed: saved.lastReviewed || reviewStamp()
+    lastReviewed: typeof saved.lastReviewed === "string" ? saved.lastReviewed : reviewStamp()
   });
-  const activeDate = typeof saved.activeDate === "string" && saved.activeDate ? saved.activeDate : dateKey();
-  const dailyBoards =
-    saved.dailyBoards && typeof saved.dailyBoards === "object"
-      ? Object.fromEntries(
-          Object.entries(saved.dailyBoards).map(([key, board]) => [key, sanitizeBoard(board, key === activeDate ? fallbackBoard : fallbackBoard)])
-        )
-      : {};
-  const activeBoard = sanitizeBoard(dailyBoards[activeDate] || fallbackBoard, fallbackBoard);
+  const activeDate = typeof saved.activeDate === "string" && saved.activeDate ? saved.activeDate : todayKey;
+  const dailyBoards = isRecord(saved.dailyBoards)
+    ? (Object.fromEntries(
+        Object.entries(saved.dailyBoards).map(([key, board]) => [key, sanitizeBoard(board, blankBoard())])
+      ) as Record<string, DailyBoard>)
+    : {};
+
+  if (!dailyBoards[activeDate]) {
+    dailyBoards[activeDate] =
+      items.length || completedToday.length || rawItems.length ? sanitizeBoard(legacyBoard, blankBoard()) : blankBoard();
+  }
+
+  const activeBoard = sanitizeBoard(dailyBoards[activeDate], blankBoard());
   const mergedBoards = { ...dailyBoards, [activeDate]: activeBoard };
 
   return {
@@ -277,6 +303,60 @@ function sanitizeSavedState(saved: Partial<CockpitState> | null): CockpitState |
     onboardingDismissed: Boolean(saved.onboardingDismissed),
     lastReviewed: activeBoard.lastReviewed
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function mergeSavedStates(primary: CockpitState, secondary: CockpitState): CockpitState {
+  const dailyBoards = { ...secondary.dailyBoards, ...primary.dailyBoards };
+  const activeDate = dailyBoards[primary.activeDate] ? primary.activeDate : secondary.activeDate;
+  const activeBoard = dailyBoards[activeDate] || blankBoard();
+
+  return {
+    ...secondary,
+    ...primary,
+    activeDate,
+    dailyBoards,
+    items: activeBoard.items,
+    completedToday: activeBoard.completedToday,
+    selectedId: activeBoard.selectedId,
+    phaseNote: activeBoard.phaseNote,
+    executionBlock: activeBoard.executionBlock,
+    lastReviewed: activeBoard.lastReviewed
+  };
+}
+
+function readStoredState() {
+  const keys = [STORAGE_KEY, ...LEGACY_STORAGE_KEYS];
+  let merged: CockpitState | null = null;
+
+  for (const key of keys) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+
+    try {
+      const parsed = sanitizeSavedState(JSON.parse(raw));
+      if (!parsed) continue;
+      merged = merged ? mergeSavedStates(merged, parsed) : parsed;
+    } catch (error) {
+      console.error("[ROI Decision Cockpit] Failed to read saved data", { key, error });
+    }
+  }
+
+  return merged;
+}
+
+function persistState(snapshot: CockpitState) {
+  const payload = JSON.stringify(syncDailyBoard(snapshot));
+  localStorage.setItem(STORAGE_KEY, payload);
+
+  for (const legacyKey of LEGACY_STORAGE_KEYS) {
+    if (legacyKey !== STORAGE_KEY) {
+      localStorage.removeItem(legacyKey);
+    }
+  }
 }
 
 function boardFromState(state: CockpitState): DailyBoard {
@@ -900,6 +980,7 @@ function TopDecision({
   todayCount,
   notNowCount,
   savedLabel,
+  saveState,
   lastReviewed,
   activeDate
 }: {
@@ -908,6 +989,7 @@ function TopDecision({
   todayCount: number;
   notNowCount: number;
   savedLabel: string;
+  saveState: SaveState;
   lastReviewed: string;
   activeDate: string;
 }) {
@@ -922,7 +1004,13 @@ function TopDecision({
             <span className="rounded-full border border-paper/15 px-3 py-1 text-xs font-semibold text-paper/75 dark:border-ink/15 dark:text-ink/75">
               {label}&apos;s call
             </span>
-            <span className="rounded-full border border-paper/15 px-3 py-1 text-xs text-paper/65 dark:border-ink/15 dark:text-ink/65">
+            <span
+              className={`rounded-full border px-3 py-1 text-xs ${
+                saveState === "failed"
+                  ? "border-clay/45 bg-clay/10 text-[#ffd5c3] dark:text-clay"
+                  : "border-paper/15 text-paper/65 dark:border-ink/15 dark:text-ink/65"
+              }`}
+            >
               {savedLabel}
             </span>
             <span className="rounded-full border border-paper/15 px-3 py-1 text-xs text-paper/65 dark:border-ink/15 dark:text-ink/65">
@@ -1089,6 +1177,7 @@ function LaneSection({
 export default function CockpitApp() {
   const [state, setState] = useState<CockpitState>(() => initialState());
   const [saveState, setSaveState] = useState<SaveState>("loading");
+  const [saveMessage, setSaveMessage] = useState("Loading…");
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const hydrated = useRef(false);
@@ -1115,22 +1204,23 @@ export default function CockpitApp() {
   });
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        const parsed = sanitizeSavedState(JSON.parse(saved));
-        if (parsed) {
-          setState(parsed);
-          const savedRanked = rankLanes(parsed.items);
-          suggestionFocusId.current = (savedRanked.find((item) => item.status === "tomorrow") || savedRanked[0])?.id || null;
-        }
-      } catch {
-        localStorage.removeItem(STORAGE_KEY);
+    try {
+      const parsed = readStoredState();
+      if (parsed) {
+        setState(parsed);
+        const savedRanked = rankLanes(parsed.items);
+        suggestionFocusId.current = (savedRanked.find((item) => item.status === "tomorrow") || savedRanked[0])?.id || null;
+        persistState(parsed);
       }
+    } catch (error) {
+      console.error("[ROI Decision Cockpit] Failed to hydrate saved data", error);
+      setSaveState("failed");
+      setSaveMessage("Save failed to load");
     }
 
     hydrated.current = true;
-    setSaveState("saved");
+    setSaveState((current) => (current === "failed" ? current : "saved"));
+    setSaveMessage((current) => (current === "Save failed to load" ? current : `Saved ${saveStamp()}`));
   }, []);
 
   useEffect(() => {
@@ -1145,12 +1235,23 @@ export default function CockpitApp() {
   useEffect(() => {
     if (!hydrated.current) return;
     setSaveState("saving");
+    setSaveMessage("Saving…");
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(syncDailyBoard(state)));
-      setSaveState("saved");
-    }, 260);
+      try {
+        persistState(state);
+        setSaveState("saved");
+        setSaveMessage(`Saved ${saveStamp()}`);
+      } catch (error) {
+        console.error("[ROI Decision Cockpit] Autosave failed", {
+          activeDate: state.activeDate,
+          error
+        });
+        setSaveState("failed");
+        setSaveMessage(error instanceof Error ? `Save failed: ${error.message}` : "Save failed");
+      }
+    }, 450);
 
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -1179,16 +1280,7 @@ export default function CockpitApp() {
     setState((current) => {
       const synced = syncDailyBoard(current);
       const existing = synced.dailyBoards[targetDate];
-      const targetBoard =
-        existing ||
-        makeBoard({
-          items: [],
-          completedToday: [],
-          selectedId: "",
-          phaseNote: PHASE_NOTE,
-          executionBlock: starterFor(""),
-          lastReviewed: reviewStamp()
-        });
+      const targetBoard = existing || blankBoard();
       const next = stateWithBoard(synced, targetDate, targetBoard);
       const targetRanked = rankLanes(next.items);
       suggestionFocusId.current = (targetRanked.find((item) => item.status === "tomorrow") || targetRanked[0])?.id || null;
@@ -1300,16 +1392,7 @@ export default function CockpitApp() {
       if (!lane) return current;
       const targetDate = shiftDateKey(current.activeDate, 1);
       const synced = syncDailyBoard(current);
-      const targetBoard =
-        synced.dailyBoards[targetDate] ||
-        makeBoard({
-          items: [],
-          completedToday: [],
-          selectedId: "",
-          phaseNote: PHASE_NOTE,
-          executionBlock: starterFor(""),
-          lastReviewed: reviewStamp()
-        });
+      const targetBoard = synced.dailyBoards[targetDate] || blankBoard();
       const movedLane = { ...lane, status: "tomorrow" as LaneStatus, updatedAt: laneStamp(), reviewHint: `Moved from ${relativeDateLabel(current.activeDate)}` };
       const remaining = current.items.filter((item) => item.id !== id);
       const currentBoard = makeBoard({
@@ -1405,23 +1488,28 @@ export default function CockpitApp() {
   }
 
   function clearSavedData() {
-    const confirmed = window.confirm("Clear all active lanes and Completed today history? This cannot be undone unless you exported a backup.");
+    const confirmed = window.confirm(
+      `Clear the ${relativeDateLabel(state.activeDate)} board only? Other saved dates will stay intact.`
+    );
     if (!confirmed) return;
-    const blankState: CockpitState = {
-      activeDate: dateKey(),
-      dailyBoards: {},
-      items: [],
-      completedToday: [],
-      selectedId: "",
-      phaseNote: PHASE_NOTE,
-      executionBlock: starterFor(""),
-      theme: state.theme,
-      onboardingDismissed: true,
-      lastReviewed: reviewStamp()
-    };
-    suggestionFocusId.current = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(blankState));
-    setState(blankState);
+
+    setState((current) => {
+      const clearedBoard = blankBoard();
+      suggestionFocusId.current = null;
+
+      return stateWithBoard(
+        {
+          ...current,
+          dailyBoards: {
+            ...current.dailyBoards,
+            [current.activeDate]: clearedBoard
+          },
+          onboardingDismissed: true
+        },
+        current.activeDate,
+        clearedBoard
+      );
+    });
   }
 
   function exportBackup() {
@@ -1445,11 +1533,24 @@ export default function CockpitApp() {
           return;
         }
 
-        const confirmed = window.confirm("Import this backup and replace the current cockpit data?");
-        if (!confirmed) return;
+        const currentSnapshot = syncDailyBoard(state);
+        const hasCurrentBoards = Object.keys(currentSnapshot.dailyBoards).length > 0;
+        const shouldMerge =
+          !hasCurrentBoards || window.confirm("Merge this backup into the current cockpit data? Existing dates stay unless the backup has the same date.");
+
+        if (shouldMerge) {
+          const merged = hasCurrentBoards ? mergeSavedStates(parsed, currentSnapshot) : parsed;
+          suggestionFocusId.current = (rankLanes(merged.items).find((item) => item.status === "tomorrow") || merged.items[0])?.id || null;
+          setState(merged);
+          return;
+        }
+
+        const shouldReplace = window.confirm("Replace the entire cockpit with this backup? This will overwrite all currently saved dates.");
+        if (!shouldReplace) return;
         suggestionFocusId.current = (rankLanes(parsed.items).find((item) => item.status === "tomorrow") || parsed.items[0])?.id || null;
         setState(parsed);
-      } catch {
+      } catch (error) {
+        console.error("[ROI Decision Cockpit] Import failed", error);
         window.alert("That backup file looks malformed. Your current data was not changed.");
       }
     };
@@ -1510,11 +1611,11 @@ export default function CockpitApp() {
                 {state.theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 {state.theme === "dark" ? "Light" : "Dark"}
               </TooltipButton>
-              <TooltipButton description="Download a JSON backup of active and completed lanes." onClick={exportBackup}>
+              <TooltipButton description="Download a JSON backup of every saved board date." onClick={exportBackup}>
                 <Download className="h-4 w-4" />
                 Backup
               </TooltipButton>
-              <TooltipButton description="Import a JSON backup. You will confirm before it replaces current data." onClick={() => importInputRef.current?.click()}>
+              <TooltipButton description="Import a JSON backup. You can merge dates or replace everything after confirmation." onClick={() => importInputRef.current?.click()}>
                 <Upload className="h-4 w-4" />
                 Import
               </TooltipButton>
@@ -1529,11 +1630,11 @@ export default function CockpitApp() {
                 ref={importInputRef}
                 type="file"
               />
-              <TooltipButton description="Replace active lanes with the starter template. Completed today is kept." onClick={resetDefaults}>
+              <TooltipButton description="Replace only this date's active lanes with the starter template. Completed for this date is kept." onClick={resetDefaults}>
                 <RefreshCw className="h-4 w-4" />
                 Restore starters
               </TooltipButton>
-              <TooltipButton description="Danger: clears active lanes and completed history after confirmation." onClick={clearSavedData} variant="danger">
+              <TooltipButton description="Danger: clears only the selected date's active lanes and completed history after confirmation." onClick={clearSavedData} variant="danger">
                 <Trash2 className="h-4 w-4" />
                 Clear
               </TooltipButton>
@@ -1554,7 +1655,8 @@ export default function CockpitApp() {
           focus={topFocus}
           lastReviewed={state.lastReviewed}
           notNowCount={pausedItems.length + delegatedItems.length}
-          savedLabel={saveState === "saving" ? "Saving..." : "Saved"}
+          saveState={saveState}
+          savedLabel={saveMessage}
           todayCount={tomorrowItems.length}
         />
 

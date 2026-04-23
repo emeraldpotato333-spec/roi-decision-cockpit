@@ -32,13 +32,13 @@ No auth, databases, external services, or integrations are used.
 
 ## Local Data
 
-The app stores one localStorage record under `roi-decision-cockpit-v1`.
+The app stores one localStorage record under `roi-decision-cockpit:v1`.
 
 - `activeDate`: the board currently open
 - `dailyBoards`: board snapshots keyed by date, such as `2026-04-23`
 - each daily board stores active lanes, completed items, the selected lane, execution block, and session note
 
-Older saved data without daily boards is migrated into today's board automatically.
+Older saved data under the previous key (`roi-decision-cockpit-v1`) or without daily boards is migrated automatically.
 
 ## Scoring Logic
 

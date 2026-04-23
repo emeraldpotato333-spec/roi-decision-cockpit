@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import type { ExecutionBlock, Lane, LaneStatus } from "./types";
 
-export const STORAGE_KEY = "roi-decision-cockpit-v1";
+export const STORAGE_KEY = "roi-decision-cockpit:v1";
+export const LEGACY_STORAGE_KEYS = ["roi-decision-cockpit-v1"];
 
 export const PHASE_NOTE =
   "When this block ends, I should have one finished move, a cleaner active list, and no need to re-decide what matters.";
