@@ -1,5 +1,5 @@
 import { formatScore } from "./scoring";
-import type { ExecutionBlock, RankedLane } from "./types";
+import type { CompletedLane, ExecutionBlock, RankedLane } from "./types";
 
 function section(title: string, items: RankedLane[]) {
   if (!items.length) return `${title}\n- None`;
@@ -9,11 +9,12 @@ function section(title: string, items: RankedLane[]) {
 export function buildDecisionSummary(params: {
   topFocus?: RankedLane;
   ranked: RankedLane[];
+  completedToday: CompletedLane[];
   executionBlock: ExecutionBlock;
   phaseNote: string;
   lastReviewed: string;
 }) {
-  const { topFocus, ranked, executionBlock, phaseNote, lastReviewed } = params;
+  const { topFocus, ranked, completedToday, executionBlock, phaseNote, lastReviewed } = params;
 
   return [
     "ROI DECISION COCKPIT",
@@ -24,12 +25,12 @@ export function buildDecisionSummary(params: {
     topFocus?.nextAction ? `Next action: ${topFocus.nextAction}` : "",
     "",
     section(
-      "Do Tomorrow",
+      "DO ASAP",
       ranked.filter((item) => item.status === "tomorrow")
     ),
     "",
     section(
-      "Pause 7 Days",
+      "Pause",
       ranked.filter((item) => item.status === "pause")
     ),
     "",
@@ -37,6 +38,10 @@ export function buildDecisionSummary(params: {
       "Low Energy / Delegate",
       ranked.filter((item) => item.status === "delegate")
     ),
+    "",
+    completedToday.length
+      ? `Completed Today\n${completedToday.map((item) => `- ${item.name} (${item.completedAt})`).join("\n")}`
+      : "Completed Today\n- None yet",
     "",
     "Execution Block",
     `Task: ${executionBlock.task}`,

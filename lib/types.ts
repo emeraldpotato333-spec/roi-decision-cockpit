@@ -19,6 +19,10 @@ export type RankedLane = Lane & {
   score: number;
 };
 
+export type CompletedLane = Lane & {
+  completedAt: string;
+};
+
 export type ExecutionBlock = {
   task: string;
   success: string;
@@ -29,6 +33,7 @@ export type ExecutionBlock = {
 
 export type CockpitState = {
   items: Lane[];
+  completedToday: CompletedLane[];
   selectedId: string;
   phaseNote: string;
   executionBlock: ExecutionBlock;

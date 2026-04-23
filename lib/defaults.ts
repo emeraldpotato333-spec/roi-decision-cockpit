@@ -16,10 +16,10 @@ export const PHASE_NOTE =
   "When this block ends, I should have one clear winner, two things I am not touching, and one next step already scheduled.";
 
 export const STATUS_OPTIONS: Array<{ value: LaneStatus; label: string; hint: string }> = [
-  { value: "tomorrow", label: "Do Tomorrow", hint: "Prime energy, concrete upside" },
-  { value: "pause", label: "Pause 7 Days", hint: "Good idea, wrong moment" },
+  { value: "tomorrow", label: "DO ASAP", hint: "Active work for prime focus" },
+  { value: "pause", label: "Pause", hint: "Not now, but worth keeping" },
   { value: "delegate", label: "Low Energy / Delegate", hint: "Useful, but not your best hour" },
-  { value: "hold", label: "Hold", hint: "Needs more evidence" }
+  { value: "hold", label: "Hold", hint: "Keep it parked until the next pass" }
 ];
 
 export const laneMeta: Record<
@@ -220,5 +220,5 @@ export function starterFor(itemName: string): ExecutionBlock {
     stop: "Stop when the next move is concrete and scheduled."
   };
 
-  return { ...seed, when: "Tomorrow, first high-focus hour" };
+  return { ...seed, when: "Today, next high-focus block" };
 }

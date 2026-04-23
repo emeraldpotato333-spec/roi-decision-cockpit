@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Clipboard,
   Copy,
+  Download,
   Moon,
   Plus,
   Printer,
@@ -15,15 +16,18 @@ import {
   Sun,
   Target,
   Trash2,
+  Upload,
   X
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PHASE_NOTE, STATUS_OPTIONS, STORAGE_KEY, createId, getDefaultItems, laneMeta, starterFor } from "@/lib/defaults";
 import { buildDecisionSummary } from "@/lib/summary";
 import { formatScore, rankLanes, scoreLabel } from "@/lib/scoring";
-import type { CockpitState, ExecutionBlock, Lane, LaneStatus, RankedLane, ScoreKey } from "@/lib/types";
+import type { CockpitState, CompletedLane, ExecutionBlock, Lane, LaneStatus, RankedLane, ScoreKey } from "@/lib/types";
 
 type SaveState = "loading" | "saved" | "saving";
+type ButtonVariant = "primary" | "quiet" | "danger";
 
 const scoreCopy: Record<ScoreKey, { label: string; weight: string; hint: string; tone: string }> = {
   revenue: {
@@ -62,6 +66,13 @@ function reviewStamp() {
   }).format(new Date());
 }
 
+function completionStamp() {
+  return new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date());
+}
+
 function initialState(): CockpitState {
   const items = getDefaultItems();
   const ranked = rankLanes(items);
@@ -69,6 +80,7 @@ function initialState(): CockpitState {
 
   return {
     items,
+    completedToday: [],
     selectedId: focus?.id || items[0]?.id || "",
     phaseNote: PHASE_NOTE,
     executionBlock: starterFor(focus?.name || ""),
@@ -78,13 +90,69 @@ function initialState(): CockpitState {
   };
 }
 
+function isLaneStatus(value: unknown): value is LaneStatus {
+  return value === "tomorrow" || value === "pause" || value === "delegate" || value === "hold";
+}
+
+function clampScore(value: unknown) {
+  const number = typeof value === "number" && Number.isFinite(value) ? value : 3;
+  return Math.min(5, Math.max(1, Math.round(number)));
+}
+
+function sanitizeLane(value: unknown, fallbackId: string): Lane | null {
+  if (!value || typeof value !== "object") return null;
+  const lane = value as Partial<Lane>;
+  const name = typeof lane.name === "string" ? lane.name : "";
+  if (!name.trim()) return null;
+
+  return {
+    id: typeof lane.id === "string" && lane.id ? lane.id : fallbackId,
+    name,
+    evidence: typeof lane.evidence === "string" ? lane.evidence : "",
+    timeRequired: typeof lane.timeRequired === "string" ? lane.timeRequired : "",
+    nextAction: typeof lane.nextAction === "string" ? lane.nextAction : "",
+    revenue: clampScore(lane.revenue),
+    urgency: clampScore(lane.urgency),
+    confidence: clampScore(lane.confidence),
+    speed: clampScore(lane.speed),
+    status: isLaneStatus(lane.status) ? lane.status : "hold"
+  };
+}
+
+function sanitizeCompleted(value: unknown, fallbackId: string): CompletedLane | null {
+  const lane = sanitizeLane(value, fallbackId);
+  if (!lane || !value || typeof value !== "object") return null;
+  const completedAt = (value as Partial<CompletedLane>).completedAt;
+
+  return {
+    ...lane,
+    completedAt: typeof completedAt === "string" && completedAt ? completedAt : completionStamp()
+  };
+}
+
 function sanitizeSavedState(saved: Partial<CockpitState> | null): CockpitState | null {
   if (!saved || !Array.isArray(saved.items)) return null;
   const fallback = initialState();
+  const items = saved.items
+    .map((item, index) => sanitizeLane(item, `saved-lane-${index}`))
+    .filter((item): item is Lane => Boolean(item));
+  const completedToday = Array.isArray(saved.completedToday)
+    ? saved.completedToday
+        .map((item, index) => sanitizeCompleted(item, `completed-lane-${index}`))
+        .filter((item): item is CompletedLane => Boolean(item))
+    : [];
+  const selectedId = typeof saved.selectedId === "string" && items.some((item) => item.id === saved.selectedId)
+    ? saved.selectedId
+    : items[0]?.id || "";
+
+  if (saved.items.length > 0 && items.length === 0) {
+    return { ...fallback, completedToday };
+  }
 
   return {
-    items: saved.items,
-    selectedId: saved.selectedId || saved.items[0]?.id || "",
+    items,
+    completedToday,
+    selectedId,
     phaseNote: saved.phaseNote || PHASE_NOTE,
     executionBlock: saved.executionBlock || fallback.executionBlock,
     theme: saved.theme === "dark" ? "dark" : "light",
@@ -96,11 +164,11 @@ function sanitizeSavedState(saved: Partial<CockpitState> | null): CockpitState |
 function statusStyle(status: LaneStatus) {
   switch (status) {
     case "tomorrow":
-      return "bg-ink text-paper dark:bg-paper dark:text-ink";
+      return "border border-moss/35 bg-moss/10 text-moss dark:text-[#a7c69b]";
     case "pause":
       return "border border-clay/30 bg-clay/10 text-clay dark:text-[#f1ad90]";
     case "delegate":
-      return "border border-saffron/40 bg-saffron/15 text-[#765820] dark:text-[#f2d28d]";
+      return "border border-saffron/35 bg-saffron/10 text-[#765820] dark:text-[#f2d28d]";
     default:
       return "border border-ink/10 bg-white/50 text-ink/70 dark:border-white/10 dark:bg-white/[0.05] dark:text-paper/70";
   }
@@ -116,6 +184,43 @@ function copyLane(item: Lane): Lane {
     id: createId(),
     name: `${item.name} Copy`
   };
+}
+
+function TooltipButton({
+  children,
+  description,
+  onClick,
+  variant = "quiet",
+  type = "button"
+}: {
+  children: ReactNode;
+  description: string;
+  onClick?: () => void;
+  variant?: ButtonVariant;
+  type?: "button" | "submit";
+}) {
+  const variants = {
+    primary: "bg-ink text-paper hover:opacity-90 dark:bg-paper dark:text-ink",
+    quiet:
+      "border border-ink/10 bg-white/60 text-ink/70 hover:bg-white dark:border-white/10 dark:bg-white/[0.05] dark:text-paper/70",
+    danger: "border border-clay/35 bg-clay/10 text-clay hover:bg-clay/15 dark:text-[#f1ad90]"
+  };
+
+  return (
+    <span className="group relative inline-flex">
+      <button
+        className={`inline-flex items-center gap-2 rounded-full px-4 py-3 text-sm font-semibold transition ${variants[variant]}`}
+        onClick={onClick}
+        title={description}
+        type={type}
+      >
+        {children}
+      </button>
+      <span className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-56 rounded-lg border border-ink/10 bg-ink px-3 py-2 text-xs font-medium leading-5 text-paper shadow-soft group-hover:block group-focus-within:block dark:border-white/10 dark:bg-paper dark:text-ink">
+        {description}
+      </span>
+    </span>
+  );
 }
 
 function SliderRow({
@@ -168,12 +273,14 @@ function RankedLaneButton({
   item,
   index,
   selected,
-  onSelect
+  onSelect,
+  onDone
 }: {
   item: RankedLane;
   index: number;
   selected: boolean;
   onSelect: () => void;
+  onDone: () => void;
 }) {
   const meta = laneMeta[item.name];
   const Icon = meta?.icon || Target;
@@ -181,26 +288,32 @@ function RankedLaneButton({
 
   return (
     <motion.div layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }}>
-      <button
-        className={`group w-full rounded-lg border p-4 text-left transition ${
+      <div
+        className={`group rounded-lg border bg-white/60 transition dark:bg-white/[0.045] ${
           selected
-            ? "border-ink/25 bg-white shadow-cockpit dark:border-white/20 dark:bg-white/[0.09]"
-            : "border-ink/10 bg-white/60 hover:border-ink/20 hover:bg-white dark:border-white/10 dark:bg-white/[0.045] dark:hover:bg-white/[0.075]"
+            ? "border-ink/25 shadow-cockpit dark:border-white/20 dark:bg-white/[0.09]"
+            : "border-ink/10 hover:border-ink/20 hover:bg-white dark:border-white/10 dark:hover:bg-white/[0.075]"
         }`}
-        onClick={onSelect}
-        type="button"
       >
-        <div className="flex items-start gap-3">
-          <div className={`mt-1 rounded-lg p-2.5 text-white ${meta?.accent || "bg-dusk"}`}>
+        <div className="flex items-start gap-3 p-4">
+          <button
+            aria-label={`Select ${item.name}`}
+            className={`mt-1 rounded-lg p-2.5 text-white ${meta?.accent || "bg-dusk"}`}
+            onClick={onSelect}
+            title={`Edit ${item.name}`}
+            type="button"
+          >
             <Icon className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
+          </button>
+          <button className="min-w-0 flex-1 text-left" onClick={onSelect} type="button">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-ink/[0.06] px-2 py-0.5 text-xs font-medium text-ink/60 dark:bg-white/10 dark:text-paper/60">
+              <span className="rounded-full border border-ink/10 px-2 py-0.5 text-xs font-medium text-ink/55 dark:border-white/10 dark:text-paper/55">
                 #{index + 1}
               </span>
               {index === 0 ? (
-                <span className="rounded-full bg-saffron px-2 py-0.5 text-xs font-semibold text-ink">Top move</span>
+                <span className="rounded-full border border-saffron/45 bg-saffron/10 px-2 py-0.5 text-xs font-semibold text-[#765820] dark:text-[#f2d28d]">
+                  Top move
+                </span>
               ) : null}
               <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusStyle(item.status)}`}>
                 {statusLabel(item.status)}
@@ -210,7 +323,7 @@ function RankedLaneButton({
               <div className="min-w-0">
                 <h3 className="truncate text-base font-semibold text-ink dark:text-paper">{item.name || "Untitled lane"}</h3>
                 <p className="mt-1 line-clamp-2 text-sm leading-5 text-ink/55 dark:text-paper/55">
-                  {item.nextAction || meta?.suggestion || "Add the next best action to make this lane executable."}
+                  {item.nextAction || meta?.suggestion || "Add the next move to make this lane executable."}
                 </p>
               </div>
               <div className="shrink-0 text-right">
@@ -218,10 +331,22 @@ function RankedLaneButton({
                 <div className="text-xs text-ink/50 dark:text-paper/50">{label}</div>
               </div>
             </div>
-          </div>
+          </button>
           <ChevronRight className="mt-8 h-4 w-4 shrink-0 text-ink/30 transition group-hover:translate-x-0.5 dark:text-paper/30" />
         </div>
-      </button>
+        <div className="flex items-center justify-between border-t border-ink/10 px-4 py-3 dark:border-white/10">
+          <div className="text-xs text-ink/45 dark:text-paper/45">Finished this?</div>
+          <button
+            className="inline-flex items-center gap-1.5 rounded-full bg-moss px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
+            onClick={onDone}
+            title="Move this lane out of active work and into Completed today."
+            type="button"
+          >
+            <Check className="h-3.5 w-3.5" />
+            Done
+          </button>
+        </div>
+      </div>
     </motion.div>
   );
 }
@@ -257,11 +382,15 @@ function TextField({
 function LaneEditor({
   item,
   onUpdate,
-  onDuplicate
+  onDuplicate,
+  onDone,
+  onDelete
 }: {
   item: RankedLane;
   onUpdate: (patch: Partial<Lane>) => void;
   onDuplicate: () => void;
+  onDone: () => void;
+  onDelete: () => void;
 }) {
   return (
     <section className="rounded-lg border border-ink/10 bg-white/70 p-5 shadow-cockpit backdrop-blur dark:border-white/10 dark:bg-white/[0.055]">
@@ -273,23 +402,44 @@ function LaneEditor({
             Only edit what changes the call. Good enough beats complete.
           </p>
         </div>
-        <button
-          className="inline-flex items-center justify-center gap-2 rounded-full border border-ink/10 bg-white/70 px-3 py-2 text-sm text-ink/70 transition hover:bg-white dark:border-white/10 dark:bg-white/[0.06] dark:text-paper/70"
-          onClick={onDuplicate}
-          type="button"
-        >
-          <Copy className="h-4 w-4" />
-          Duplicate
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-moss px-3 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+            onClick={onDone}
+            title="Mark this lane complete and move it to Completed today."
+            type="button"
+          >
+            <Check className="h-4 w-4" />
+            Done
+          </button>
+          <button
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-ink/10 bg-white/70 px-3 py-2 text-sm text-ink/70 transition hover:bg-white dark:border-white/10 dark:bg-white/[0.06] dark:text-paper/70"
+            onClick={onDuplicate}
+            title="Create a copy of this lane in the active list."
+            type="button"
+          >
+            <Copy className="h-4 w-4" />
+            Duplicate
+          </button>
+          <button
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-clay/30 bg-clay/10 px-3 py-2 text-sm font-semibold text-clay transition hover:bg-clay/15 dark:text-[#f1ad90]"
+            onClick={onDelete}
+            title="Delete only this lane from the active list."
+            type="button"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-4">
         <TextField label="Lane name" onChange={(name) => onUpdate({ name })} placeholder="Ex: Partner outreach" value={item.name} />
         <TextField
-          label="Proof"
+          label="Why now"
           multiline
           onChange={(evidence) => onUpdate({ evidence })}
-          placeholder="What proof says this is worth attention?"
+          placeholder="Context, timing, or the reason this is worth doing now."
           value={item.evidence}
         />
         <div className="grid gap-4 md:grid-cols-[0.55fr_1fr]">
@@ -431,7 +581,7 @@ function OnboardingModal({
     },
     {
       title: "Leave with one block",
-      body: "The app turns the top Do Tomorrow lane into a startable work block. Edit it until future-you can begin."
+      body: "The app turns the top DO ASAP lane into a startable work block. Edit it until future-you can begin."
     }
   ];
 
@@ -527,7 +677,9 @@ function TopDecision({
       <div className="grid gap-0 lg:grid-cols-[1fr_340px]">
         <div className="p-5 sm:p-7">
           <div className="mb-5 flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-saffron px-3 py-1 text-xs font-semibold text-ink">Today&apos;s call</span>
+            <span className="rounded-full border border-paper/15 px-3 py-1 text-xs font-semibold text-paper/75 dark:border-ink/15 dark:text-ink/75">
+              Today&apos;s call
+            </span>
             <span className="rounded-full border border-paper/15 px-3 py-1 text-xs text-paper/65 dark:border-ink/15 dark:text-ink/65">
               {savedLabel}
             </span>
@@ -571,12 +723,61 @@ function TopDecision({
               <span className="font-semibold text-paper dark:text-ink">Stop:</span> {block.stop}
             </p>
           </div>
-          <div className="mt-5 rounded-lg bg-saffron px-4 py-3 text-sm font-semibold text-ink">
+          <div className="mt-5 rounded-lg border border-paper/10 bg-paper/[0.07] px-4 py-3 text-sm font-semibold leading-6 text-paper/80 dark:border-ink/10 dark:bg-ink/[0.055] dark:text-ink/80">
             {notNowCount > 0
               ? `${notNowCount} lane${notNowCount === 1 ? "" : "s"} intentionally out of prime time`
               : "Cut at least one lane before you call it done"}
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function CompletedToday({
+  items,
+  onRestore
+}: {
+  items: CompletedLane[];
+  onRestore: (id: string) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-moss/25 bg-moss/10 p-5 shadow-soft dark:border-moss/35 dark:bg-moss/10">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase text-moss dark:text-[#a7c69b]">Progress</p>
+          <h2 className="mt-1 text-2xl font-semibold">Completed today</h2>
+        </div>
+        <span className="rounded-full border border-moss/25 px-3 py-1 text-sm font-semibold text-moss dark:text-[#a7c69b]">
+          {items.length}
+        </span>
+      </div>
+      <div className="space-y-2">
+        {items.length ? (
+          items.map((item) => (
+            <div
+              className="flex items-start justify-between gap-3 rounded-lg border border-moss/20 bg-white/65 px-3 py-3 text-sm dark:bg-white/[0.045]"
+              key={`${item.id}-${item.completedAt}`}
+            >
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-ink dark:text-paper">{item.name}</div>
+                <div className="mt-1 text-xs text-ink/50 dark:text-paper/50">Done {item.completedAt}</div>
+              </div>
+              <button
+                className="shrink-0 rounded-full border border-ink/10 px-3 py-1.5 text-xs font-semibold text-ink/60 transition hover:bg-white dark:border-white/10 dark:text-paper/60 dark:hover:bg-white/[0.06]"
+                onClick={() => onRestore(item.id)}
+                title="Move this item back into the active list."
+                type="button"
+              >
+                Undo
+              </button>
+            </div>
+          ))
+        ) : (
+          <div className="rounded-lg border border-dashed border-moss/25 px-3 py-3 text-sm leading-6 text-ink/55 dark:text-paper/55">
+            Mark a lane Done and it will land here.
+          </div>
+        )}
       </div>
     </section>
   );
@@ -590,6 +791,7 @@ export default function CockpitApp() {
   const hydrated = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suggestionFocusId = useRef<string | null>(state.selectedId);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const ranked = useMemo(() => rankLanes(state.items), [state.items]);
   const selected = ranked.find((item) => item.id === state.selectedId) || ranked[0];
@@ -601,6 +803,7 @@ export default function CockpitApp() {
   const summary = buildDecisionSummary({
     topFocus,
     ranked,
+    completedToday: state.completedToday,
     executionBlock: state.executionBlock,
     phaseNote: state.phaseNote,
     lastReviewed: state.lastReviewed
@@ -706,17 +909,75 @@ export default function CockpitApp() {
     }));
   }
 
+  function nextSelectedId(items: Lane[], removedId: string) {
+    return items.find((item) => item.id !== removedId)?.id || "";
+  }
+
+  function completeLane(id: string) {
+    setState((current) => {
+      const lane = current.items.find((item) => item.id === id);
+      if (!lane) return current;
+      const remaining = current.items.filter((item) => item.id !== id);
+
+      return {
+        ...current,
+        items: remaining,
+        completedToday: [{ ...lane, completedAt: completionStamp() }, ...current.completedToday],
+        selectedId: current.selectedId === id ? nextSelectedId(remaining, id) : current.selectedId,
+        lastReviewed: reviewStamp()
+      };
+    });
+  }
+
+  function deleteLane(id: string) {
+    const lane = state.items.find((item) => item.id === id);
+    if (!lane) return;
+    const confirmed = window.confirm(`Delete "${lane.name}" from the active list? This does not add it to Completed today.`);
+    if (!confirmed) return;
+
+    setState((current) => {
+      const remaining = current.items.filter((item) => item.id !== id);
+
+      return {
+        ...current,
+        items: remaining,
+        selectedId: current.selectedId === id ? nextSelectedId(remaining, id) : current.selectedId,
+        lastReviewed: reviewStamp()
+      };
+    });
+  }
+
+  function restoreCompleted(id: string) {
+    setState((current) => {
+      const completed = current.completedToday.find((item) => item.id === id);
+      if (!completed) return current;
+      const { completedAt: _completedAt, ...lane } = completed;
+      const restored = { ...lane, status: "hold" as LaneStatus };
+
+      return {
+        ...current,
+        items: [restored, ...current.items],
+        completedToday: current.completedToday.filter((item) => item.id !== id),
+        selectedId: restored.id,
+        lastReviewed: reviewStamp()
+      };
+    });
+  }
+
   function resetDefaults() {
+    const confirmed = window.confirm("Restore the starter lane set? This replaces active lanes but keeps Completed today.");
+    if (!confirmed) return;
     const fresh = initialState();
     suggestionFocusId.current = fresh.selectedId;
-    setState({ ...fresh, theme: state.theme, onboardingDismissed: true });
+    setState({ ...fresh, completedToday: state.completedToday, theme: state.theme, onboardingDismissed: true });
   }
 
   function clearSavedData() {
-    const confirmed = window.confirm("Clear all lanes and saved decisions? Starter templates can be restored with Defaults.");
+    const confirmed = window.confirm("Clear all active lanes and Completed today history? This cannot be undone unless you exported a backup.");
     if (!confirmed) return;
     const blankState: CockpitState = {
       items: [],
+      completedToday: [],
       selectedId: "",
       phaseNote: PHASE_NOTE,
       executionBlock: starterFor(""),
@@ -727,6 +988,38 @@ export default function CockpitApp() {
     suggestionFocusId.current = null;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(blankState));
     setState(blankState);
+  }
+
+  function exportBackup() {
+    const payload = JSON.stringify(state, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `roi-decision-cockpit-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importBackup(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = sanitizeSavedState(JSON.parse(String(reader.result)));
+        if (!parsed) {
+          window.alert("That backup could not be read. Your current data was not changed.");
+          return;
+        }
+
+        const confirmed = window.confirm("Import this backup and replace the current cockpit data?");
+        if (!confirmed) return;
+        suggestionFocusId.current = (rankLanes(parsed.items).find((item) => item.status === "tomorrow") || parsed.items[0])?.id || null;
+        setState(parsed);
+      } catch {
+        window.alert("That backup file looks malformed. Your current data was not changed.");
+      }
+    };
+    reader.readAsText(file);
   }
 
   function closeOnboarding() {
@@ -765,46 +1058,51 @@ export default function CockpitApp() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button
-                className="inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/60 px-4 py-3 text-sm text-ink/70 transition hover:bg-white dark:border-white/10 dark:bg-white/[0.05] dark:text-paper/70"
+              <TooltipButton
+                description="Reopen the quick three-step guide."
                 onClick={() => setOnboardingOpen(true)}
-                type="button"
               >
                 <Sparkles className="h-4 w-4" />
                 How it works
-              </button>
-              <button
-                className="inline-flex items-center gap-2 rounded-full bg-ink px-4 py-3 text-sm font-semibold text-paper transition hover:opacity-90 dark:bg-paper dark:text-ink"
-                onClick={addLane}
-                type="button"
-              >
+              </TooltipButton>
+              <TooltipButton description="Add a new active lane to score and work." onClick={addLane} variant="primary">
                 <Plus className="h-4 w-4" />
                 Add lane
-              </button>
-              <button
-                className="inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/60 px-4 py-3 text-sm text-ink/70 transition hover:bg-white dark:border-white/10 dark:bg-white/[0.05] dark:text-paper/70"
+              </TooltipButton>
+              <TooltipButton
+                description="Switch between light and dark mode. Your tasks are unchanged."
                 onClick={() => commit({ theme: state.theme === "dark" ? "light" : "dark" })}
-                type="button"
               >
                 {state.theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 {state.theme === "dark" ? "Light" : "Dark"}
-              </button>
-              <button
-                className="inline-flex items-center gap-2 rounded-full border border-ink/10 bg-white/60 px-4 py-3 text-sm text-ink/70 transition hover:bg-white dark:border-white/10 dark:bg-white/[0.05] dark:text-paper/70"
-                onClick={resetDefaults}
-                type="button"
-              >
+              </TooltipButton>
+              <TooltipButton description="Download a JSON backup of active and completed lanes." onClick={exportBackup}>
+                <Download className="h-4 w-4" />
+                Backup
+              </TooltipButton>
+              <TooltipButton description="Import a JSON backup. You will confirm before it replaces current data." onClick={() => importInputRef.current?.click()}>
+                <Upload className="h-4 w-4" />
+                Import
+              </TooltipButton>
+              <input
+                accept="application/json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) importBackup(file);
+                  event.target.value = "";
+                }}
+                ref={importInputRef}
+                type="file"
+              />
+              <TooltipButton description="Replace active lanes with the starter template. Completed today is kept." onClick={resetDefaults}>
                 <RefreshCw className="h-4 w-4" />
-                Restore
-              </button>
-              <button
-                className="inline-flex items-center gap-2 rounded-full border border-clay/25 bg-clay/10 px-4 py-3 text-sm text-clay transition hover:bg-clay/15 dark:text-[#f1ad90]"
-                onClick={clearSavedData}
-                type="button"
-              >
+                Restore starters
+              </TooltipButton>
+              <TooltipButton description="Danger: clears active lanes and completed history after confirmation." onClick={clearSavedData} variant="danger">
                 <Trash2 className="h-4 w-4" />
                 Clear
-              </button>
+              </TooltipButton>
             </div>
           </div>
         </motion.header>
@@ -837,6 +1135,7 @@ export default function CockpitApp() {
                     index={index}
                     item={item}
                     key={item.id}
+                    onDone={() => completeLane(item.id)}
                     onSelect={() => commit({ selectedId: item.id })}
                     selected={selected?.id === item.id}
                   />
@@ -853,6 +1152,8 @@ export default function CockpitApp() {
             {selected ? (
               <LaneEditor
                 item={selected}
+                onDelete={() => deleteLane(selected.id)}
+                onDone={() => completeLane(selected.id)}
                 onDuplicate={duplicateSelected}
                 onUpdate={(patch) => updateLane(selected.id, patch)}
               />
@@ -865,6 +1166,8 @@ export default function CockpitApp() {
               focus={topFocus}
               onChange={(patch) => commit({ executionBlock: { ...state.executionBlock, ...patch } })}
             />
+
+            <CompletedToday items={state.completedToday} onRestore={restoreCompleted} />
 
             <details className="group rounded-lg border border-ink/10 bg-white/55 shadow-soft backdrop-blur dark:border-white/10 dark:bg-white/[0.045]">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4">
@@ -880,8 +1183,8 @@ export default function CockpitApp() {
                 <p className="mb-3 text-sm leading-6 text-ink/55 dark:text-paper/55">
                   Use this to confirm what you are not spending high-focus energy on.
                 </p>
-                <DecisionGroup title="Do Tomorrow" items={tomorrowItems} />
-                <DecisionGroup title="Pause 7 Days" items={pausedItems} />
+                <DecisionGroup title="DO ASAP" items={tomorrowItems} />
+                <DecisionGroup title="Pause" items={pausedItems} />
                 <DecisionGroup title="Low Energy / Delegate" items={delegatedItems} />
                 {hotBoard ? (
                   <div className="mt-4 rounded-lg border border-clay/25 bg-clay/10 p-4 text-sm leading-6 text-clay dark:text-[#f1ad90]">

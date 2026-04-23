@@ -52,7 +52,7 @@ Score bands:
 - Okay: 3.10-3.79
 - Weak: below 3.10
 
-The ranked board automatically sorts by weighted score. The execution block is suggested from the top-ranked lane tagged `Do Tomorrow`.
+The ranked board automatically sorts by weighted score. The execution block is suggested from the top-ranked lane tagged `DO ASAP`.
 
 ## Editing Starter Lanes
 
@@ -80,4 +80,7 @@ No environment variables are required.
 - The top recommendation is always visible as a dedicated card.
 - Status tags are fast buttons because the most important workflow is deciding what not to touch.
 - A gentle scoring warning appears when too many lanes are ranked high.
-- Clear Data creates an empty cockpit; Defaults restores the starter templates.
+- `Done` moves active lanes into Completed today.
+- `Clear` is destructive and asks for confirmation.
+- `Restore starters` replaces active lanes with starter templates while keeping Completed today.
+- JSON backup/import is available from the header for local data safety.
