@@ -36,13 +36,13 @@ Each lane is scored from 1 to 5 across four factors:
 
 - Revenue upside: 35%
 - Urgency: 25%
-- Confidence: 20%
+- Conviction: 20%
 - Speed to feedback: 20%
 
 The weighted score is:
 
 ```text
-(revenue * 0.35) + (urgency * 0.25) + (confidence * 0.20) + (speed * 0.20)
+(revenue * 0.35) + (urgency * 0.25) + (conviction * 0.20) + (speed * 0.20)
 ```
 
 Score bands:
@@ -52,7 +52,7 @@ Score bands:
 - Okay: 3.10-3.79
 - Weak: below 3.10
 
-The ranked board automatically sorts by weighted score. The execution block is suggested from the top-ranked lane tagged `DO ASAP`.
+The Today list shows lanes tagged `DO ASAP`; Later keeps paused, delegated, and held lanes visible without crowding the day. The execution block is suggested from the top-ranked `DO ASAP` lane.
 
 ## Editing Starter Lanes
 
@@ -76,7 +76,7 @@ No environment variables are required.
 
 ## Product Decisions
 
-- The ranked board and focused editor are split so the app feels like a cockpit, not a spreadsheet.
+- Today, Later, and Completed today keep the cockpit operational without turning it into a task manager.
 - The top recommendation is always visible as a dedicated card.
 - Status tags are fast buttons because the most important workflow is deciding what not to touch.
 - A gentle scoring warning appears when too many lanes are ranked high.

@@ -13,7 +13,7 @@ import type { ExecutionBlock, Lane, LaneStatus } from "./types";
 export const STORAGE_KEY = "roi-decision-cockpit-v1";
 
 export const PHASE_NOTE =
-  "When this block ends, I should have one clear winner, two things I am not touching, and one next step already scheduled.";
+  "When this block ends, I should have one finished move, a cleaner active list, and no need to re-decide what matters.";
 
 export const STATUS_OPTIONS: Array<{ value: LaneStatus; label: string; hint: string }> = [
   { value: "tomorrow", label: "DO ASAP", hint: "Active work for prime focus" },

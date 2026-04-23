@@ -6,6 +6,7 @@ export type Lane = {
   id: string;
   name: string;
   evidence: string;
+  laneNote?: string;
   timeRequired: string;
   nextAction: string;
   revenue: number;
@@ -13,6 +14,8 @@ export type Lane = {
   confidence: number;
   speed: number;
   status: LaneStatus;
+  updatedAt?: string;
+  reviewHint?: string;
 };
 
 export type RankedLane = Lane & {

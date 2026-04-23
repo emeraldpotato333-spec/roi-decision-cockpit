@@ -33,25 +33,25 @@ const scoreCopy: Record<ScoreKey, { label: string; weight: string; hint: string;
   revenue: {
     label: "Revenue upside",
     weight: "35%",
-    hint: "Will this plausibly move money, conversion, or leverage?",
+    hint: "Will this move money, conversion, or leverage?",
     tone: "bg-moss"
   },
   urgency: {
     label: "Urgency",
     weight: "25%",
-    hint: "Does waiting create real opportunity cost?",
+    hint: "Does waiting cost momentum or money?",
     tone: "bg-clay"
   },
   confidence: {
-    label: "Confidence",
+    label: "Conviction",
     weight: "20%",
-    hint: "Is there evidence, not just momentum or mood?",
+    hint: "How strong is the evidence behind this call? 1 = hunch, 5 = proven signal.",
     tone: "bg-[#52747a]"
   },
   speed: {
     label: "Speed to feedback",
     weight: "20%",
-    hint: "Will this teach you something soon?",
+    hint: "Will this show a useful signal quickly?",
     tone: "bg-saffron"
   }
 };
@@ -70,6 +70,13 @@ function completionStamp() {
   return new Intl.DateTimeFormat("en", {
     hour: "numeric",
     minute: "2-digit"
+  }).format(new Date());
+}
+
+function laneStamp() {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric"
   }).format(new Date());
 }
 
@@ -109,13 +116,16 @@ function sanitizeLane(value: unknown, fallbackId: string): Lane | null {
     id: typeof lane.id === "string" && lane.id ? lane.id : fallbackId,
     name,
     evidence: typeof lane.evidence === "string" ? lane.evidence : "",
+    laneNote: typeof lane.laneNote === "string" ? lane.laneNote : "",
     timeRequired: typeof lane.timeRequired === "string" ? lane.timeRequired : "",
     nextAction: typeof lane.nextAction === "string" ? lane.nextAction : "",
     revenue: clampScore(lane.revenue),
     urgency: clampScore(lane.urgency),
     confidence: clampScore(lane.confidence),
     speed: clampScore(lane.speed),
-    status: isLaneStatus(lane.status) ? lane.status : "hold"
+    status: isLaneStatus(lane.status) ? lane.status : "hold",
+    updatedAt: typeof lane.updatedAt === "string" && lane.updatedAt ? lane.updatedAt : laneStamp(),
+    reviewHint: typeof lane.reviewHint === "string" ? lane.reviewHint : ""
   };
 }
 
@@ -285,6 +295,7 @@ function RankedLaneButton({
   const meta = laneMeta[item.name];
   const Icon = meta?.icon || Target;
   const label = scoreLabel(item.score);
+  const isLater = item.status !== "tomorrow";
 
   return (
     <motion.div layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }}>
@@ -325,6 +336,10 @@ function RankedLaneButton({
                 <p className="mt-1 line-clamp-2 text-sm leading-5 text-ink/55 dark:text-paper/55">
                   {item.nextAction || meta?.suggestion || "Add the next move to make this lane executable."}
                 </p>
+                <p className="mt-2 text-xs text-ink/40 dark:text-paper/40">
+                  Updated {item.updatedAt || "today"}
+                  {isLater && item.reviewHint ? ` · ${item.reviewHint}` : ""}
+                </p>
               </div>
               <div className="shrink-0 text-right">
                 <div className="text-xl font-semibold tabular-nums text-ink dark:text-paper">{formatScore(item.score)}</div>
@@ -335,7 +350,7 @@ function RankedLaneButton({
           <ChevronRight className="mt-8 h-4 w-4 shrink-0 text-ink/30 transition group-hover:translate-x-0.5 dark:text-paper/30" />
         </div>
         <div className="flex items-center justify-between border-t border-ink/10 px-4 py-3 dark:border-white/10">
-          <div className="text-xs text-ink/45 dark:text-paper/45">Finished this?</div>
+          <div className="text-xs text-ink/45 dark:text-paper/45">{isLater ? "Bring it forward when ready" : "Finished this?"}</div>
           <button
             className="inline-flex items-center gap-1.5 rounded-full bg-moss px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
             onClick={onDone}
@@ -442,6 +457,13 @@ function LaneEditor({
           placeholder="Context, timing, or the reason this is worth doing now."
           value={item.evidence}
         />
+        <TextField
+          label="Lane memory"
+          multiline
+          onChange={(laneNote) => onUpdate({ laneNote })}
+          placeholder="Tiny note for later: what changed, why parked, or what to check next."
+          value={item.laneNote || ""}
+        />
         <div className="grid gap-4 md:grid-cols-[0.55fr_1fr]">
           <TextField
             label="Time"
@@ -458,8 +480,8 @@ function LaneEditor({
         </div>
 
         <div className="rounded-lg border border-saffron/35 bg-saffron/15 p-4 text-sm leading-6 text-ink/70 dark:text-paper/70">
-          <strong className="text-ink dark:text-paper">Keep 5s rare.</strong> If everything feels hot, lower the lane with
-          weaker proof or slower feedback.
+          <strong className="text-ink dark:text-paper">Conviction check:</strong> 1 is a hunch. 3 has some signal. 5 has
+          hard evidence or a pattern you trust.
         </div>
 
         <div className="grid gap-3">
@@ -660,14 +682,14 @@ function OnboardingModal({
 function TopDecision({
   focus,
   block,
-  tomorrowCount,
+  todayCount,
   notNowCount,
   savedLabel,
   lastReviewed
 }: {
   focus?: RankedLane;
   block: ExecutionBlock;
-  tomorrowCount: number;
+  todayCount: number;
   notNowCount: number;
   savedLabel: string;
   lastReviewed: string;
@@ -704,10 +726,10 @@ function TopDecision({
               <div className="mt-1 text-3xl font-semibold">{focus ? scoreLabel(focus.score) : "None"}</div>
             </div>
             <div className="rounded-lg border border-paper/12 bg-paper/[0.07] px-4 py-3 dark:border-ink/10 dark:bg-ink/[0.055]">
-              <div className="text-xs uppercase text-paper/45 dark:text-ink/45">Prime slots</div>
-              <div className="mt-1 text-3xl font-semibold">{tomorrowCount}</div>
+              <div className="text-xs uppercase text-paper/45 dark:text-ink/45">Today</div>
+              <div className="mt-1 text-3xl font-semibold">{todayCount}</div>
               <div className="mt-1 text-xs text-paper/48 dark:text-ink/48">
-                {tomorrowCount > 2 ? "Trim to 1-2" : "Good constraint"}
+                {todayCount > 2 ? "Trim to 1-2" : "Active list"}
               </div>
             </div>
           </div>
@@ -783,6 +805,57 @@ function CompletedToday({
   );
 }
 
+function LaneSection({
+  title,
+  eyebrow,
+  helper,
+  items,
+  selectedId,
+  onSelect,
+  onDone
+}: {
+  title: string;
+  eyebrow: string;
+  helper: string;
+  items: RankedLane[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+  onDone: (id: string) => void;
+}) {
+  return (
+    <section className="rounded-lg border border-ink/10 bg-white/60 p-5 shadow-cockpit backdrop-blur dark:border-white/10 dark:bg-white/[0.045]">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase text-saffron">{eyebrow}</p>
+          <h2 className="mt-1 text-2xl font-semibold">{title}</h2>
+                <p className="mt-1 text-sm leading-6 text-ink/55 dark:text-paper/55">{helper}</p>
+        </div>
+        <span className="rounded-full border border-ink/10 px-3 py-1 text-sm text-ink/60 dark:border-white/10 dark:text-paper/60">
+          {items.length}
+        </span>
+      </div>
+      <div className="space-y-4">
+        {items.length ? (
+          items.map((item, index) => (
+            <RankedLaneButton
+              index={index}
+              item={item}
+              key={item.id}
+              onDone={() => onDone(item.id)}
+              onSelect={() => onSelect(item.id)}
+              selected={selectedId === item.id}
+            />
+          ))
+        ) : (
+          <div className="rounded-lg border border-dashed border-ink/10 bg-white/50 p-6 text-sm leading-6 text-ink/55 dark:border-white/10 dark:bg-white/[0.035] dark:text-paper/55">
+            {title === "Today" ? "No DO ASAP lanes. Move one forward when you are ready to work." : "No parked lanes."}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function CockpitApp() {
   const [state, setState] = useState<CockpitState>(() => initialState());
   const [saveState, setSaveState] = useState<SaveState>("loading");
@@ -797,6 +870,7 @@ export default function CockpitApp() {
   const selected = ranked.find((item) => item.id === state.selectedId) || ranked[0];
   const topFocus = ranked.find((item) => item.status === "tomorrow") || ranked[0];
   const tomorrowItems = ranked.filter((item) => item.status === "tomorrow");
+  const laterItems = ranked.filter((item) => item.status !== "tomorrow");
   const pausedItems = ranked.filter((item) => item.status === "pause");
   const delegatedItems = ranked.filter((item) => item.status === "delegate");
   const hotBoard = ranked.filter((item) => item.score >= 4.25).length >= 4;
@@ -873,7 +947,25 @@ export default function CockpitApp() {
     setState((current) => ({
       ...current,
       lastReviewed: reviewStamp(),
-      items: current.items.map((item) => (item.id === id ? { ...item, ...patch } : item))
+      items: current.items.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              ...patch,
+              updatedAt: laneStamp(),
+              reviewHint:
+                patch.status === "pause"
+                  ? "Review later"
+                  : patch.status === "hold"
+                    ? "Waiting for a clearer reason"
+                    : patch.status === "delegate"
+                      ? "Save for low-energy time"
+                      : patch.status === "tomorrow"
+                        ? ""
+                        : item.reviewHint
+            }
+          : item
+      )
     }));
   }
 
@@ -882,13 +974,16 @@ export default function CockpitApp() {
       id: createId(),
       name: "New Lane",
       evidence: "",
+      laneNote: "",
       timeRequired: "45-60 min",
       nextAction: "",
       revenue: 3,
       urgency: 3,
       confidence: 3,
       speed: 3,
-      status: "hold"
+      status: "hold",
+      updatedAt: laneStamp(),
+      reviewHint: "New"
     };
     setState((current) => ({
       ...current,
@@ -900,7 +995,7 @@ export default function CockpitApp() {
 
   function duplicateSelected() {
     if (!selected) return;
-    const duplicate = copyLane(selected);
+    const duplicate = { ...copyLane(selected), updatedAt: laneStamp(), reviewHint: "Copied" };
     setState((current) => ({
       ...current,
       items: [duplicate, ...current.items],
@@ -952,7 +1047,7 @@ export default function CockpitApp() {
       const completed = current.completedToday.find((item) => item.id === id);
       if (!completed) return current;
       const { completedAt: _completedAt, ...lane } = completed;
-      const restored = { ...lane, status: "hold" as LaneStatus };
+      const restored = { ...lane, status: "hold" as LaneStatus, updatedAt: laneStamp(), reviewHint: "Restored from completed" };
 
       return {
         ...current,
@@ -1113,39 +1208,29 @@ export default function CockpitApp() {
           lastReviewed={state.lastReviewed}
           notNowCount={pausedItems.length + delegatedItems.length}
           savedLabel={saveState === "saving" ? "Saving..." : "Saved"}
-          tomorrowCount={tomorrowItems.length}
+          todayCount={tomorrowItems.length}
         />
 
         <section className="grid gap-5 xl:grid-cols-[0.82fr_1.05fr_0.88fr]">
           <div className="space-y-5">
-            <div className="rounded-lg border border-ink/10 bg-white/60 p-5 shadow-cockpit backdrop-blur dark:border-white/10 dark:bg-white/[0.045]">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase text-saffron">Start here</p>
-                  <h2 className="mt-1 text-2xl font-semibold">Ranked lanes</h2>
-                  <p className="mt-1 text-sm text-ink/55 dark:text-paper/55">Pick one lane, then tune the score.</p>
-                </div>
-                <span className="rounded-full bg-ink/[0.06] px-3 py-1 text-sm text-ink/60 dark:bg-white/10 dark:text-paper/60">
-                  {ranked.length} lanes
-                </span>
-              </div>
-              <div className="space-y-4">
-                {ranked.length ? ranked.map((item, index) => (
-                  <RankedLaneButton
-                    index={index}
-                    item={item}
-                    key={item.id}
-                    onDone={() => completeLane(item.id)}
-                    onSelect={() => commit({ selectedId: item.id })}
-                    selected={selected?.id === item.id}
-                  />
-                )) : (
-                  <div className="rounded-lg border border-dashed border-ink/10 bg-white/50 p-6 text-sm leading-6 text-ink/55 dark:border-white/10 dark:bg-white/[0.035] dark:text-paper/55">
-                    Empty board. Add one lane, or restore the starter set.
-                  </div>
-                )}
-              </div>
-            </div>
+            <LaneSection
+              eyebrow="Start here"
+              helper="Active work for today. Keep this short."
+              items={tomorrowItems}
+              onDone={completeLane}
+              onSelect={(id) => commit({ selectedId: id })}
+              selectedId={selected?.id}
+              title="Today"
+            />
+            <LaneSection
+              eyebrow="Review later"
+              helper="Parked lanes stay visible without crowding today."
+              items={laterItems}
+              onDone={completeLane}
+              onSelect={(id) => commit({ selectedId: id })}
+              selectedId={selected?.id}
+              title="Later"
+            />
           </div>
 
           <div className="space-y-5">
@@ -1173,7 +1258,7 @@ export default function CockpitApp() {
               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4">
                 <div>
                   <p className="text-xs font-semibold uppercase text-ink/45 dark:text-paper/45">The cuts</p>
-                  <h2 className="mt-1 text-lg font-semibold">Not prime time</h2>
+                  <h2 className="mt-1 text-lg font-semibold">Review queue</h2>
                 </div>
                 <span className="rounded-full bg-ink/[0.06] px-3 py-1 text-sm text-ink/60 dark:bg-white/10 dark:text-paper/60">
                   {pausedItems.length + delegatedItems.length}
@@ -1181,11 +1266,11 @@ export default function CockpitApp() {
               </summary>
               <div className="px-4 pb-4">
                 <p className="mb-3 text-sm leading-6 text-ink/55 dark:text-paper/55">
-                  Use this to confirm what you are not spending high-focus energy on.
+                  A quick check on parked work so old lanes do not go stale.
                 </p>
-                <DecisionGroup title="DO ASAP" items={tomorrowItems} />
                 <DecisionGroup title="Pause" items={pausedItems} />
                 <DecisionGroup title="Low Energy / Delegate" items={delegatedItems} />
+                <DecisionGroup title="Hold" items={ranked.filter((item) => item.status === "hold")} />
                 {hotBoard ? (
                   <div className="mt-4 rounded-lg border border-clay/25 bg-clay/10 p-4 text-sm leading-6 text-clay dark:text-[#f1ad90]">
                     Too many hot lanes. Downgrade one unless the proof is strong.

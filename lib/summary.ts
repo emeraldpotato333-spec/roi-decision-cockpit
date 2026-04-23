@@ -25,18 +25,13 @@ export function buildDecisionSummary(params: {
     topFocus?.nextAction ? `Next action: ${topFocus.nextAction}` : "",
     "",
     section(
-      "DO ASAP",
+      "Today / DO ASAP",
       ranked.filter((item) => item.status === "tomorrow")
     ),
     "",
     section(
-      "Pause",
-      ranked.filter((item) => item.status === "pause")
-    ),
-    "",
-    section(
-      "Low Energy / Delegate",
-      ranked.filter((item) => item.status === "delegate")
+      "Later",
+      ranked.filter((item) => item.status !== "tomorrow")
     ),
     "",
     completedToday.length
