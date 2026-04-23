@@ -30,6 +30,16 @@ npm run build
 
 No auth, databases, external services, or integrations are used.
 
+## Local Data
+
+The app stores one localStorage record under `roi-decision-cockpit-v1`.
+
+- `activeDate`: the board currently open
+- `dailyBoards`: board snapshots keyed by date, such as `2026-04-23`
+- each daily board stores active lanes, completed items, the selected lane, execution block, and session note
+
+Older saved data without daily boards is migrated into today's board automatically.
+
 ## Scoring Logic
 
 Each lane is scored from 1 to 5 across four factors:
@@ -84,3 +94,4 @@ No environment variables are required.
 - `Clear` is destructive and asks for confirmation.
 - `Restore starters` replaces active lanes with starter templates while keeping Completed today.
 - JSON backup/import is available from the header for local data safety.
+- Daily boards provide Yesterday / Today / Tomorrow navigation without adding a full calendar system.

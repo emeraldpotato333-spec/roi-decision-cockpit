@@ -24,6 +24,7 @@ export type RankedLane = Lane & {
 
 export type CompletedLane = Lane & {
   completedAt: string;
+  completionNote?: string;
 };
 
 export type ExecutionBlock = {
@@ -34,7 +35,18 @@ export type ExecutionBlock = {
   when: string;
 };
 
+export type DailyBoard = {
+  items: Lane[];
+  completedToday: CompletedLane[];
+  selectedId: string;
+  phaseNote: string;
+  executionBlock: ExecutionBlock;
+  lastReviewed: string;
+};
+
 export type CockpitState = {
+  activeDate: string;
+  dailyBoards: Record<string, DailyBoard>;
   items: Lane[];
   completedToday: CompletedLane[];
   selectedId: string;

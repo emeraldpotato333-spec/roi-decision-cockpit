@@ -35,7 +35,9 @@ export function buildDecisionSummary(params: {
     ),
     "",
     completedToday.length
-      ? `Completed Today\n${completedToday.map((item) => `- ${item.name} (${item.completedAt})`).join("\n")}`
+      ? `Completed Today\n${completedToday
+          .map((item) => `- ${item.name} (${item.completedAt})${item.completionNote ? `: ${item.completionNote}` : ""}`)
+          .join("\n")}`
       : "Completed Today\n- None yet",
     "",
     "Execution Block",

@@ -24,10 +24,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PHASE_NOTE, STATUS_OPTIONS, STORAGE_KEY, createId, getDefaultItems, laneMeta, starterFor } from "@/lib/defaults";
 import { buildDecisionSummary } from "@/lib/summary";
 import { formatScore, rankLanes, scoreLabel } from "@/lib/scoring";
-import type { CockpitState, CompletedLane, ExecutionBlock, Lane, LaneStatus, RankedLane, ScoreKey } from "@/lib/types";
+import type { CockpitState, CompletedLane, DailyBoard, ExecutionBlock, Lane, LaneStatus, RankedLane, ScoreKey } from "@/lib/types";
 
 type SaveState = "loading" | "saved" | "saving";
 type ButtonVariant = "primary" | "quiet" | "danger";
+type DateDirection = -1 | 0 | 1;
 
 const scoreCopy: Record<ScoreKey, { label: string; weight: string; hint: string; tone: string }> = {
   revenue: {
@@ -66,6 +67,35 @@ function reviewStamp() {
   }).format(new Date());
 }
 
+function dateKey(date = new Date()) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function shiftDateKey(key: string, days: number) {
+  const [year, month, day] = key.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + days);
+  return dateKey(date);
+}
+
+function displayDate(key: string) {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Intl.DateTimeFormat("en", {
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(year, month - 1, day));
+}
+
+function relativeDateLabel(key: string) {
+  const today = dateKey();
+  if (key === today) return "Today";
+  if (key === shiftDateKey(today, -1)) return "Yesterday";
+  if (key === shiftDateKey(today, 1)) return "Tomorrow";
+  return displayDate(key);
+}
+
 function completionStamp() {
   return new Intl.DateTimeFormat("en", {
     hour: "numeric",
@@ -84,16 +114,27 @@ function initialState(): CockpitState {
   const items = getDefaultItems();
   const ranked = rankLanes(items);
   const focus = ranked.find((item) => item.status === "tomorrow") || ranked[0];
-
-  return {
+  const activeDate = dateKey();
+  const board: DailyBoard = {
     items,
     completedToday: [],
     selectedId: focus?.id || items[0]?.id || "",
     phaseNote: PHASE_NOTE,
     executionBlock: starterFor(focus?.name || ""),
+    lastReviewed: reviewStamp()
+  };
+
+  return {
+    activeDate,
+    dailyBoards: { [activeDate]: board },
+    items,
+    completedToday: [],
+    selectedId: board.selectedId,
+    phaseNote: board.phaseNote,
+    executionBlock: board.executionBlock,
     theme: "light",
     onboardingDismissed: false,
-    lastReviewed: reviewStamp()
+    lastReviewed: board.lastReviewed
   };
 }
 
@@ -136,7 +177,54 @@ function sanitizeCompleted(value: unknown, fallbackId: string): CompletedLane | 
 
   return {
     ...lane,
-    completedAt: typeof completedAt === "string" && completedAt ? completedAt : completionStamp()
+    completedAt: typeof completedAt === "string" && completedAt ? completedAt : completionStamp(),
+    completionNote:
+      typeof (value as Partial<CompletedLane>).completionNote === "string" ? (value as Partial<CompletedLane>).completionNote : ""
+  };
+}
+
+function makeBoard(params: {
+  items: Lane[];
+  completedToday: CompletedLane[];
+  selectedId: string;
+  phaseNote: string;
+  executionBlock: ExecutionBlock;
+  lastReviewed: string;
+}): DailyBoard {
+  return {
+    items: params.items,
+    completedToday: params.completedToday,
+    selectedId: params.selectedId,
+    phaseNote: params.phaseNote,
+    executionBlock: params.executionBlock,
+    lastReviewed: params.lastReviewed
+  };
+}
+
+function sanitizeBoard(value: unknown, fallback: DailyBoard): DailyBoard {
+  if (!value || typeof value !== "object") return fallback;
+  const board = value as Partial<DailyBoard>;
+  const items = Array.isArray(board.items)
+    ? board.items.map((item, index) => sanitizeLane(item, `board-lane-${index}`)).filter((item): item is Lane => Boolean(item))
+    : fallback.items;
+  const completedToday = Array.isArray(board.completedToday)
+    ? board.completedToday
+        .map((item, index) => sanitizeCompleted(item, `board-completed-${index}`))
+        .filter((item): item is CompletedLane => Boolean(item))
+    : fallback.completedToday;
+  const ranked = rankLanes(items);
+  const focus = ranked.find((item) => item.status === "tomorrow") || ranked[0];
+  const selectedId = typeof board.selectedId === "string" && items.some((item) => item.id === board.selectedId)
+    ? board.selectedId
+    : focus?.id || items[0]?.id || "";
+
+  return {
+    items,
+    completedToday,
+    selectedId,
+    phaseNote: typeof board.phaseNote === "string" ? board.phaseNote : fallback.phaseNote,
+    executionBlock: board.executionBlock || fallback.executionBlock,
+    lastReviewed: typeof board.lastReviewed === "string" ? board.lastReviewed : fallback.lastReviewed
   };
 }
 
@@ -159,15 +247,73 @@ function sanitizeSavedState(saved: Partial<CockpitState> | null): CockpitState |
     return { ...fallback, completedToday };
   }
 
-  return {
+  const fallbackBoard = makeBoard({
     items,
     completedToday,
     selectedId,
     phaseNote: saved.phaseNote || PHASE_NOTE,
     executionBlock: saved.executionBlock || fallback.executionBlock,
+    lastReviewed: saved.lastReviewed || reviewStamp()
+  });
+  const activeDate = typeof saved.activeDate === "string" && saved.activeDate ? saved.activeDate : dateKey();
+  const dailyBoards =
+    saved.dailyBoards && typeof saved.dailyBoards === "object"
+      ? Object.fromEntries(
+          Object.entries(saved.dailyBoards).map(([key, board]) => [key, sanitizeBoard(board, key === activeDate ? fallbackBoard : fallbackBoard)])
+        )
+      : {};
+  const activeBoard = sanitizeBoard(dailyBoards[activeDate] || fallbackBoard, fallbackBoard);
+  const mergedBoards = { ...dailyBoards, [activeDate]: activeBoard };
+
+  return {
+    activeDate,
+    dailyBoards: mergedBoards,
+    items: activeBoard.items,
+    completedToday: activeBoard.completedToday,
+    selectedId: activeBoard.selectedId,
+    phaseNote: activeBoard.phaseNote,
+    executionBlock: activeBoard.executionBlock,
     theme: saved.theme === "dark" ? "dark" : "light",
     onboardingDismissed: Boolean(saved.onboardingDismissed),
-    lastReviewed: saved.lastReviewed || reviewStamp()
+    lastReviewed: activeBoard.lastReviewed
+  };
+}
+
+function boardFromState(state: CockpitState): DailyBoard {
+  return makeBoard({
+    items: state.items,
+    completedToday: state.completedToday,
+    selectedId: state.selectedId,
+    phaseNote: state.phaseNote,
+    executionBlock: state.executionBlock,
+    lastReviewed: state.lastReviewed
+  });
+}
+
+function syncDailyBoard(state: CockpitState): CockpitState {
+  return {
+    ...state,
+    dailyBoards: {
+      ...state.dailyBoards,
+      [state.activeDate]: boardFromState(state)
+    }
+  };
+}
+
+function stateWithBoard(state: CockpitState, activeDate: string, board: DailyBoard): CockpitState {
+  return {
+    ...state,
+    activeDate,
+    dailyBoards: {
+      ...state.dailyBoards,
+      [activeDate]: board
+    },
+    items: board.items,
+    completedToday: board.completedToday,
+    selectedId: board.selectedId,
+    phaseNote: board.phaseNote,
+    executionBlock: board.executionBlock,
+    lastReviewed: board.lastReviewed
   };
 }
 
@@ -194,6 +340,60 @@ function copyLane(item: Lane): Lane {
     id: createId(),
     name: `${item.name} Copy`
   };
+}
+
+function DateNavigator({
+  activeDate,
+  onShift,
+  onToday,
+  onSelectDate
+}: {
+  activeDate: string;
+  onShift: (direction: DateDirection) => void;
+  onToday: () => void;
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-ink/10 bg-white/60 p-3 shadow-soft backdrop-blur dark:border-white/10 dark:bg-white/[0.045]">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase text-ink/45 dark:text-paper/45">Board date</p>
+          <h2 className="mt-1 text-2xl font-semibold">{relativeDateLabel(activeDate)}</h2>
+          <p className="mt-1 text-sm text-ink/55 dark:text-paper/55">{displayDate(activeDate)}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className="rounded-full border border-ink/10 px-4 py-2 text-sm font-semibold text-ink/65 transition hover:bg-white dark:border-white/10 dark:text-paper/65 dark:hover:bg-white/[0.06]"
+            onClick={() => onShift(-1)}
+            type="button"
+          >
+            Yesterday
+          </button>
+          <button
+            className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-paper transition hover:opacity-90 dark:bg-paper dark:text-ink"
+            onClick={onToday}
+            type="button"
+          >
+            Today
+          </button>
+          <button
+            className="rounded-full border border-ink/10 px-4 py-2 text-sm font-semibold text-ink/65 transition hover:bg-white dark:border-white/10 dark:text-paper/65 dark:hover:bg-white/[0.06]"
+            onClick={() => onShift(1)}
+            type="button"
+          >
+            Tomorrow
+          </button>
+          <input
+            aria-label="Choose board date"
+            className="rounded-full border border-ink/10 bg-white/65 px-4 py-2 text-sm text-ink/70 outline-none transition focus:border-saffron dark:border-white/10 dark:bg-white/[0.055] dark:text-paper/70"
+            onChange={(event) => onSelectDate(event.target.value)}
+            type="date"
+            value={activeDate}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TooltipButton({
@@ -399,13 +599,15 @@ function LaneEditor({
   onUpdate,
   onDuplicate,
   onDone,
-  onDelete
+  onDelete,
+  onMoveTomorrow
 }: {
   item: RankedLane;
   onUpdate: (patch: Partial<Lane>) => void;
   onDuplicate: () => void;
   onDone: () => void;
   onDelete: () => void;
+  onMoveTomorrow: () => void;
 }) {
   return (
     <section className="rounded-lg border border-ink/10 bg-white/70 p-5 shadow-cockpit backdrop-blur dark:border-white/10 dark:bg-white/[0.055]">
@@ -435,6 +637,15 @@ function LaneEditor({
           >
             <Copy className="h-4 w-4" />
             Duplicate
+          </button>
+          <button
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-ink/10 bg-white/70 px-3 py-2 text-sm text-ink/70 transition hover:bg-white dark:border-white/10 dark:bg-white/[0.06] dark:text-paper/70"
+            onClick={onMoveTomorrow}
+            title="Move this lane to tomorrow's board."
+            type="button"
+          >
+            <ChevronRight className="h-4 w-4" />
+            Tomorrow
           </button>
           <button
             className="inline-flex items-center justify-center gap-2 rounded-full border border-clay/30 bg-clay/10 px-3 py-2 text-sm font-semibold text-clay transition hover:bg-clay/15 dark:text-[#f1ad90]"
@@ -479,10 +690,14 @@ function LaneEditor({
           />
         </div>
 
-        <div className="rounded-lg border border-saffron/35 bg-saffron/15 p-4 text-sm leading-6 text-ink/70 dark:text-paper/70">
-          <strong className="text-ink dark:text-paper">Conviction check:</strong> 1 is a hunch. 3 has some signal. 5 has
-          hard evidence or a pattern you trust.
-        </div>
+        <details className="rounded-lg border border-ink/10 bg-white/50 text-sm leading-6 text-ink/65 dark:border-white/10 dark:bg-white/[0.04] dark:text-paper/65">
+          <summary className="cursor-pointer list-none px-4 py-3 font-semibold text-ink dark:text-paper">
+            How to score Conviction
+          </summary>
+          <p className="px-4 pb-4">
+            1 is a hunch. 3 has some signal. 5 has hard evidence or a pattern you trust.
+          </p>
+        </details>
 
         <div className="grid gap-3">
           {(["revenue", "urgency", "confidence", "speed"] as ScoreKey[]).map((scoreKey) => (
@@ -685,7 +900,8 @@ function TopDecision({
   todayCount,
   notNowCount,
   savedLabel,
-  lastReviewed
+  lastReviewed,
+  activeDate
 }: {
   focus?: RankedLane;
   block: ExecutionBlock;
@@ -693,14 +909,18 @@ function TopDecision({
   notNowCount: number;
   savedLabel: string;
   lastReviewed: string;
+  activeDate: string;
 }) {
+  const label = relativeDateLabel(activeDate);
+  const isToday = activeDate === dateKey();
+
   return (
     <section className="overflow-hidden rounded-lg border border-ink/10 bg-ink text-paper shadow-cockpit dark:border-white/10 dark:bg-paper dark:text-ink">
       <div className="grid gap-0 lg:grid-cols-[1fr_340px]">
         <div className="p-5 sm:p-7">
           <div className="mb-5 flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-paper/15 px-3 py-1 text-xs font-semibold text-paper/75 dark:border-ink/15 dark:text-ink/75">
-              Today&apos;s call
+              {label}&apos;s call
             </span>
             <span className="rounded-full border border-paper/15 px-3 py-1 text-xs text-paper/65 dark:border-ink/15 dark:text-ink/65">
               {savedLabel}
@@ -709,7 +929,9 @@ function TopDecision({
               {lastReviewed}
             </span>
           </div>
-          <p className="text-sm font-medium uppercase text-paper/46 dark:text-ink/46">Work on this first</p>
+          <p className="text-sm font-medium uppercase text-paper/46 dark:text-ink/46">
+            {isToday ? "Work on this first" : "Board call"}
+          </p>
           <h2 className="mt-2 max-w-3xl text-4xl font-semibold sm:text-5xl">
             {focus?.name || "Choose one lane"}
           </h2>
@@ -726,7 +948,7 @@ function TopDecision({
               <div className="mt-1 text-3xl font-semibold">{focus ? scoreLabel(focus.score) : "None"}</div>
             </div>
             <div className="rounded-lg border border-paper/12 bg-paper/[0.07] px-4 py-3 dark:border-ink/10 dark:bg-ink/[0.055]">
-              <div className="text-xs uppercase text-paper/45 dark:text-ink/45">Today</div>
+              <div className="text-xs uppercase text-paper/45 dark:text-ink/45">{label}</div>
               <div className="mt-1 text-3xl font-semibold">{todayCount}</div>
               <div className="mt-1 text-xs text-paper/48 dark:text-ink/48">
                 {todayCount > 2 ? "Trim to 1-2" : "Active list"}
@@ -758,10 +980,12 @@ function TopDecision({
 
 function CompletedToday({
   items,
-  onRestore
+  onRestore,
+  onNote
 }: {
   items: CompletedLane[];
-  onRestore: (id: string) => void;
+  onRestore: (id: string, completedAt: string) => void;
+  onNote: (id: string, completedAt: string, note: string) => void;
 }) {
   return (
     <section className="rounded-lg border border-moss/25 bg-moss/10 p-5 shadow-soft dark:border-moss/35 dark:bg-moss/10">
@@ -784,10 +1008,16 @@ function CompletedToday({
               <div className="min-w-0">
                 <div className="truncate font-semibold text-ink dark:text-paper">{item.name}</div>
                 <div className="mt-1 text-xs text-ink/50 dark:text-paper/50">Done {item.completedAt}</div>
+                <textarea
+                  className="mt-2 min-h-[52px] w-full rounded-lg border border-moss/20 bg-white/70 px-3 py-2 text-xs leading-5 text-ink outline-none transition placeholder:text-ink/35 focus:border-moss dark:border-moss/25 dark:bg-white/[0.05] dark:text-paper dark:placeholder:text-paper/35"
+                  onChange={(event) => onNote(item.id, item.completedAt, event.target.value)}
+                  placeholder="Optional recap: what worked, learned, or should change next time."
+                  value={item.completionNote || ""}
+                />
               </div>
               <button
                 className="shrink-0 rounded-full border border-ink/10 px-3 py-1.5 text-xs font-semibold text-ink/60 transition hover:bg-white dark:border-white/10 dark:text-paper/60 dark:hover:bg-white/[0.06]"
-                onClick={() => onRestore(item.id)}
+                onClick={() => onRestore(item.id, item.completedAt)}
                 title="Move this item back into the active list."
                 type="button"
               >
@@ -865,6 +1095,7 @@ export default function CockpitApp() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suggestionFocusId = useRef<string | null>(state.selectedId);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
 
   const ranked = useMemo(() => rankLanes(state.items), [state.items]);
   const selected = ranked.find((item) => item.id === state.selectedId) || ranked[0];
@@ -917,7 +1148,7 @@ export default function CockpitApp() {
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(syncDailyBoard(state)));
       setSaveState("saved");
     }, 260);
 
@@ -941,6 +1172,32 @@ export default function CockpitApp() {
 
   function commit(patch: Partial<CockpitState>) {
     setState((current) => ({ ...current, ...patch, lastReviewed: reviewStamp() }));
+  }
+
+  function switchDate(targetDate: string) {
+    if (!targetDate) return;
+    setState((current) => {
+      const synced = syncDailyBoard(current);
+      const existing = synced.dailyBoards[targetDate];
+      const targetBoard =
+        existing ||
+        makeBoard({
+          items: [],
+          completedToday: [],
+          selectedId: "",
+          phaseNote: PHASE_NOTE,
+          executionBlock: starterFor(""),
+          lastReviewed: reviewStamp()
+        });
+      const next = stateWithBoard(synced, targetDate, targetBoard);
+      const targetRanked = rankLanes(next.items);
+      suggestionFocusId.current = (targetRanked.find((item) => item.status === "tomorrow") || targetRanked[0])?.id || null;
+      return next;
+    });
+  }
+
+  function shiftActiveDate(direction: DateDirection) {
+    switchDate(shiftDateKey(state.activeDate, direction));
   }
 
   function updateLane(id: string, patch: Partial<Lane>) {
@@ -991,6 +1248,9 @@ export default function CockpitApp() {
       selectedId: newLane.id,
       lastReviewed: reviewStamp()
     }));
+    window.requestAnimationFrame(() => {
+      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function duplicateSelected() {
@@ -1017,9 +1277,67 @@ export default function CockpitApp() {
       return {
         ...current,
         items: remaining,
-        completedToday: [{ ...lane, completedAt: completionStamp() }, ...current.completedToday],
+        completedToday: [{ ...lane, completedAt: completionStamp(), completionNote: "" }, ...current.completedToday],
         selectedId: current.selectedId === id ? nextSelectedId(remaining, id) : current.selectedId,
         lastReviewed: reviewStamp()
+      };
+    });
+  }
+
+  function updateCompletionNote(id: string, completedAt: string, note: string) {
+    setState((current) => ({
+      ...current,
+      completedToday: current.completedToday.map((item) =>
+        item.id === id && item.completedAt === completedAt ? { ...item, completionNote: note } : item
+      ),
+      lastReviewed: reviewStamp()
+    }));
+  }
+
+  function moveLaneToTomorrow(id: string) {
+    setState((current) => {
+      const lane = current.items.find((item) => item.id === id);
+      if (!lane) return current;
+      const targetDate = shiftDateKey(current.activeDate, 1);
+      const synced = syncDailyBoard(current);
+      const targetBoard =
+        synced.dailyBoards[targetDate] ||
+        makeBoard({
+          items: [],
+          completedToday: [],
+          selectedId: "",
+          phaseNote: PHASE_NOTE,
+          executionBlock: starterFor(""),
+          lastReviewed: reviewStamp()
+        });
+      const movedLane = { ...lane, status: "tomorrow" as LaneStatus, updatedAt: laneStamp(), reviewHint: `Moved from ${relativeDateLabel(current.activeDate)}` };
+      const remaining = current.items.filter((item) => item.id !== id);
+      const currentBoard = makeBoard({
+        items: remaining,
+        completedToday: current.completedToday,
+        selectedId: current.selectedId === id ? nextSelectedId(remaining, id) : current.selectedId,
+        phaseNote: current.phaseNote,
+        executionBlock: current.executionBlock,
+        lastReviewed: reviewStamp()
+      });
+      const updatedTargetBoard = {
+        ...targetBoard,
+        items: [movedLane, ...targetBoard.items],
+        selectedId: movedLane.id,
+        executionBlock: starterFor(movedLane.name),
+        lastReviewed: reviewStamp()
+      };
+
+      return {
+        ...current,
+        items: currentBoard.items,
+        selectedId: currentBoard.selectedId,
+        lastReviewed: currentBoard.lastReviewed,
+        dailyBoards: {
+          ...synced.dailyBoards,
+          [current.activeDate]: currentBoard,
+          [targetDate]: updatedTargetBoard
+        }
       };
     });
   }
@@ -1042,9 +1360,9 @@ export default function CockpitApp() {
     });
   }
 
-  function restoreCompleted(id: string) {
+  function restoreCompleted(id: string, completedAt: string) {
     setState((current) => {
-      const completed = current.completedToday.find((item) => item.id === id);
+      const completed = current.completedToday.find((item) => item.id === id && item.completedAt === completedAt);
       if (!completed) return current;
       const { completedAt: _completedAt, ...lane } = completed;
       const restored = { ...lane, status: "hold" as LaneStatus, updatedAt: laneStamp(), reviewHint: "Restored from completed" };
@@ -1052,7 +1370,7 @@ export default function CockpitApp() {
       return {
         ...current,
         items: [restored, ...current.items],
-        completedToday: current.completedToday.filter((item) => item.id !== id),
+        completedToday: current.completedToday.filter((item) => !(item.id === id && item.completedAt === completedAt)),
         selectedId: restored.id,
         lastReviewed: reviewStamp()
       };
@@ -1060,17 +1378,38 @@ export default function CockpitApp() {
   }
 
   function resetDefaults() {
-    const confirmed = window.confirm("Restore the starter lane set? This replaces active lanes but keeps Completed today.");
+    const confirmed = window.confirm("Restore the starter lane set for this date? This replaces active lanes but keeps Completed for this date.");
     if (!confirmed) return;
     const fresh = initialState();
     suggestionFocusId.current = fresh.selectedId;
-    setState({ ...fresh, completedToday: state.completedToday, theme: state.theme, onboardingDismissed: true });
+    const board = makeBoard({
+      items: fresh.items,
+      completedToday: state.completedToday,
+      selectedId: fresh.selectedId,
+      phaseNote: fresh.phaseNote,
+      executionBlock: fresh.executionBlock,
+      lastReviewed: reviewStamp()
+    });
+    setState((current) =>
+      stateWithBoard(
+        {
+          ...current,
+          theme: state.theme,
+          onboardingDismissed: true,
+          dailyBoards: { ...current.dailyBoards, [current.activeDate]: board }
+        },
+        current.activeDate,
+        board
+      )
+    );
   }
 
   function clearSavedData() {
     const confirmed = window.confirm("Clear all active lanes and Completed today history? This cannot be undone unless you exported a backup.");
     if (!confirmed) return;
     const blankState: CockpitState = {
+      activeDate: dateKey(),
+      dailyBoards: {},
       items: [],
       completedToday: [],
       selectedId: "",
@@ -1086,7 +1425,7 @@ export default function CockpitApp() {
   }
 
   function exportBackup() {
-    const payload = JSON.stringify(state, null, 2);
+    const payload = JSON.stringify(syncDailyBoard(state), null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -1202,7 +1541,15 @@ export default function CockpitApp() {
           </div>
         </motion.header>
 
+        <DateNavigator
+          activeDate={state.activeDate}
+          onSelectDate={switchDate}
+          onShift={shiftActiveDate}
+          onToday={() => switchDate(dateKey())}
+        />
+
         <TopDecision
+          activeDate={state.activeDate}
           block={state.executionBlock}
           focus={topFocus}
           lastReviewed={state.lastReviewed}
@@ -1235,13 +1582,16 @@ export default function CockpitApp() {
 
           <div className="space-y-5">
             {selected ? (
-              <LaneEditor
-                item={selected}
-                onDelete={() => deleteLane(selected.id)}
-                onDone={() => completeLane(selected.id)}
-                onDuplicate={duplicateSelected}
-                onUpdate={(patch) => updateLane(selected.id, patch)}
-              />
+              <div ref={editorRef}>
+                <LaneEditor
+                  item={selected}
+                  onDelete={() => deleteLane(selected.id)}
+                  onDone={() => completeLane(selected.id)}
+                  onDuplicate={duplicateSelected}
+                  onMoveTomorrow={() => moveLaneToTomorrow(selected.id)}
+                  onUpdate={(patch) => updateLane(selected.id, patch)}
+                />
+              </div>
             ) : null}
           </div>
 
@@ -1252,7 +1602,7 @@ export default function CockpitApp() {
               onChange={(patch) => commit({ executionBlock: { ...state.executionBlock, ...patch } })}
             />
 
-            <CompletedToday items={state.completedToday} onRestore={restoreCompleted} />
+            <CompletedToday items={state.completedToday} onNote={updateCompletionNote} onRestore={restoreCompleted} />
 
             <details className="group rounded-lg border border-ink/10 bg-white/55 shadow-soft backdrop-blur dark:border-white/10 dark:bg-white/[0.045]">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-4">
